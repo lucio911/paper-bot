@@ -2,6 +2,7 @@ import os
 import requests
 import google.generativeai as genai
 import markdown
+import time
 from datetime import datetime, timedelta
 
 SEARCH_JOURNALS = [
@@ -34,26 +35,35 @@ def get_latest_papers(journals=None, max_results=3):
             "fields": "title,authors,year,venue,abstract,url,publicationDate",
         }
         
-        try:
-            response = requests.get(SEMANTIC_SCHOLAR_API, params=params, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                for item in data.get("data", []):
-                    papers.append({
-                        'title': item.get('title', ''),
-                        'summary': item.get('abstract', '无摘要'),
-                        'authors': [a.get('name', '') for a in item.get('authors', [])],
-                        'published': item.get('publicationDate', item.get('year', '')),
-                        'pdf_url': item.get('url', ''),
-                        'journal': journal,
-                        'venue': item.get('venue', journal)
-                    })
-            else:
-                print(f"  获取期刊 {journal} 失败: {response.status_code}")
-        except Exception as e:
-            print(f"  获取期刊 {journal} 异常: {e}")
+        for retry in range(3):
+            try:
+                response = requests.get(SEMANTIC_SCHOLAR_API, params=params, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get("data", []):
+                        papers.append({
+                            'title': item.get('title', ''),
+                            'summary': item.get('abstract', '无摘要'),
+                            'authors': [a.get('name', '') for a in item.get('authors', [])],
+                            'published': item.get('publicationDate', item.get('year', '')),
+                            'pdf_url': item.get('url', ''),
+                            'journal': journal,
+                            'venue': item.get('venue', journal)
+                        })
+                    break
+                elif response.status_code == 429:
+                    print(f"  速率限制，等待重试...")
+                    time.sleep(5)
+                else:
+                    print(f"  获取期刊 {journal} 失败: {response.status_code}")
+                    break
+            except Exception as e:
+                print(f"  获取期刊 {journal} 异常: {e}")
+                break
+        
+        time.sleep(1)
     
-    papers.sort(key=lambda x: x['published'], reverse=True)
+    papers.sort(key=lambda x: x['published'] or '', reverse=True)
     return papers[:max_results * len(journals)]
 
 def generate_summary(paper, api_key=None):
