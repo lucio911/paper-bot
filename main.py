@@ -112,6 +112,41 @@ def send_wechat_notification(message, token=None):
     except Exception as e:
         print(f"微信推送异常: {e}")
 
+def send_email_notification(message):
+    """通过Gmail SMTP发送邮件"""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+    smtp_port = int(os.getenv('SMTP_PORT', '587'))
+    smtp_user = os.getenv('SMTP_USER')
+    smtp_password = os.getenv('SMTP_PASSWORD')
+    email_from = os.getenv('EMAIL_FROM')
+    email_to = os.getenv('EMAIL_TO')
+    
+    if not all([smtp_user, smtp_password, email_from, email_to]):
+        print("未配置邮箱推送，跳过")
+        return
+    
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = '岩土工程论文日报'
+        msg['From'] = email_from
+        msg['To'] = email_to
+        
+        html_part = MIMEText(message, 'html', 'utf-8')
+        msg.attach(html_part)
+        
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+        
+        print("邮箱推送成功")
+    except Exception as e:
+        print(f"邮箱推送失败: {e}")
+
 def generate_daily_report(papers, summaries):
     """生成格式化日报"""
     report = []
@@ -168,6 +203,7 @@ def main():
     print("="*50)
     
     send_wechat_notification(report)
+    send_email_notification(report)
     
     return report
 
