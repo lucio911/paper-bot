@@ -1,52 +1,72 @@
 import os
-import arxiv
+import requests
 import google.generativeai as genai
 from datetime import datetime, timedelta
-import requests
 
-SEARCH_TOPICS = ["LLM", "large language model", "transformer", "GPT"]
-MAX_RESULTS = 5
+SEARCH_JOURNALS = [
+    "Construction and Building Materials",
+    "Transportation Geotechnics", 
+    "Engineering Failure Analysis",
+    "Canadian Geotechnical Journal",
+    "Tunnelling and Underground Space Technology",
+    "Ocean Engineering",
+    "Computers and Geotechnics",
+    "Engineering Applications of Artificial Intelligence",
+    "Computer-Aided Civil and Infrastructure Engineering",
+    "Computers & Industrial Engineering"
+]
+MAX_RESULTS = 3
 
-def get_latest_papers(topics=None, max_results=5):
-    """从ArXiv获取最新论文"""
-    if topics is None:
-        topics = SEARCH_TOPICS
+SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+
+def get_latest_papers(journals=None, max_results=3):
+    """从Semantic Scholar按期刊获取最新论文"""
+    if journals is None:
+        journals = SEARCH_JOURNALS
     
-    client = arxiv.Client()
     papers = []
     
-    for topic in topics:
-        search = arxiv.Search(
-            query=topic,
-            max_results=max_results,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending
-        )
+    for journal in journals:
+        params = {
+            "query": f"journal:{journal}",
+            "limit": max_results,
+            "fields": "title,authors,year,venue,abstract,url,publicationDate",
+            "sort": "publicationDate:desc"
+        }
         
-        for result in client.results(search):
-            papers.append({
-                'title': result.title,
-                'summary': result.summary,
-                'authors': [author.name for author in result.authors],
-                'published': result.published.strftime('%Y-%m-%d'),
-                'pdf_url': result.entry_id,
-                'topic': topic
-            })
+        try:
+            response = requests.get(SEMANTIC_SCHOLAR_API, params=params, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                for item in data.get("data", []):
+                    papers.append({
+                        'title': item.get('title', ''),
+                        'summary': item.get('abstract', '无摘要'),
+                        'authors': [a.get('name', '') for a in item.get('authors', [])],
+                        'published': item.get('publicationDate', item.get('year', '')),
+                        'pdf_url': item.get('url', ''),
+                        'journal': journal,
+                        'venue': item.get('venue', journal)
+                    })
+            else:
+                print(f"  获取期刊 {journal} 失败: {response.status_code}")
+        except Exception as e:
+            print(f"  获取期刊 {journal} 异常: {e}")
     
     papers.sort(key=lambda x: x['published'], reverse=True)
-    return papers[:max_results * len(topics)]
+    return papers[:max_results * len(journals)]
 
 def generate_summary(paper, api_key=None):
     """调用Gemini API生成论文摘要"""
     if api_key:
         genai.configure(api_key=api_key)
     
-    prompt = f"""你是一位专业的AI论文分析师。请仔细阅读以下论文信息，并提供详细的中文解读：
+    prompt = f"""你是一位专业的土木工程/岩土工程论文分析师。请仔细阅读以下论文信息，并提供详细的中文解读：
 
 论文标题：{paper['title']}
-作者：{', '.join(paper['authors'])}
+作者：{', '.join(paper['authors'][:5])}{'等' if len(paper['authors']) > 5 else ''}
 发表日期：{paper['published']}
-主题：{paper['topic']}
+期刊：{paper['journal']}
 
 原文摘要：
 {paper['summary']}
@@ -78,7 +98,7 @@ def send_wechat_notification(message, token=None):
     url = "http://www.pushplus.plus/send"
     data = {
         "token": token,
-        "title": "ArXiv论文日报",
+        "title": "岩土工程论文日报",
         "content": message,
         "template": "html"
     }
@@ -95,20 +115,20 @@ def send_wechat_notification(message, token=None):
 def generate_daily_report(papers, summaries):
     """生成格式化日报"""
     report = []
-    report.append("# ArXiv AI论文日报\n")
-    report.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    report.append(f"论文数量: {len(papers)}\n")
-    report.append("---\n")
+    report.append("<h1>岩土工程论文日报</h1>\n")
+    report.append(f"<p>生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>\n")
+    report.append(f"<p>论文数量: {len(papers)}</p>\n")
+    report.append("<hr>\n")
     
     for i, (paper, summary) in enumerate(zip(papers, summaries), 1):
-        report.append(f"## {i}. {paper['title']}\n")
-        report.append(f"- **主题**: {paper['topic']}\n")
-        report.append(f"- **作者**: {', '.join(paper['authors'][:3])}{'等' if len(paper['authors']) > 3 else ''}\n")
-        report.append(f"- **发布日期**: {paper['published']}\n")
-        report.append(f"- **PDF链接**: [点击查看]({paper['pdf_url']})\n")
-        report.append("\n")
-        report.append(summary)
-        report.append("\n---\n")
+        report.append(f"<h2>{i}. {paper['title']}</h2>\n")
+        report.append(f"<p><strong>期刊:</strong> {paper['journal']}</p>\n")
+        report.append(f"<p><strong>作者:</strong> {', '.join(paper['authors'][:3])}{'等' if len(paper['authors']) > 3 else ''}</p>\n")
+        report.append(f"<p><strong>发布日期:</strong> {paper['published']}</p>\n")
+        report.append(f"<p><strong>链接:</strong> <a href=\"{paper['pdf_url']}\">点击查看</a></p>\n")
+        report.append("<br>\n")
+        report.append(summary.replace('\n', '<br>\n'))
+        report.append("<hr>\n")
     
     return ''.join(report)
 
@@ -121,20 +141,25 @@ def main():
         print("请设置: set GOOGLE_API_KEY=你的API密钥")
         api_key = input("请输入Gemini API Key: ").strip()
     
-    print("正在获取ArXiv最新论文...")
+    print("正在获取各期刊最新论文...")
     papers = get_latest_papers(max_results=MAX_RESULTS)
     print(f"获取到 {len(papers)} 篇论文\n")
+    
+    if not papers:
+        print("未获取到任何论文，请检查网络连接和API")
+        return
     
     print("正在生成论文解读...")
     summaries = []
     for i, paper in enumerate(papers, 1):
-        print(f"  处理第 {i}/{len(papers)} 篇: {paper['title'][:50]}...")
+        title_short = paper['title'][:50] + "..." if len(paper['title']) > 50 else paper['title']
+        print(f"  处理第 {i}/{len(papers)} 篇: {title_short}")
         try:
             summary = generate_summary(paper, api_key)
             summaries.append(summary)
         except Exception as e:
             print(f"  生成摘要失败: {e}")
-            summaries.append("摘要生成失败")
+            summaries.append("**摘要生成失败**")
     
     report = generate_daily_report(papers, summaries)
     
