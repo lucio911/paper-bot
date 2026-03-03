@@ -1,6 +1,7 @@
 import os
 import requests
 import google.generativeai as genai
+import markdown
 from datetime import datetime, timedelta
 
 SEARCH_JOURNALS = [
@@ -28,10 +29,9 @@ def get_latest_papers(journals=None, max_results=3):
     
     for journal in journals:
         params = {
-            "query": f"journal:{journal}",
+            "query": journal,
             "limit": max_results,
             "fields": "title,authors,year,venue,abstract,url,publicationDate",
-            "sort": "publicationDate:desc"
         }
         
         try:
@@ -144,6 +144,9 @@ def send_email_notification(message):
             server.send_message(msg)
         
         print("邮箱推送成功")
+    except smtplib.SMTPAuthenticationError:
+        print("❌ 认证失败：Gmail必须使用App Password（非账号密码）")
+        print("   开启路径：Google账号 → 安全 → 两步验证开启后 → 搜索App passwords → 生成16位密码")
     except Exception as e:
         print(f"邮箱推送失败: {e}")
 
@@ -162,7 +165,7 @@ def generate_daily_report(papers, summaries):
         report.append(f"<p><strong>发布日期:</strong> {paper['published']}</p>\n")
         report.append(f"<p><strong>链接:</strong> <a href=\"{paper['pdf_url']}\">点击查看</a></p>\n")
         report.append("<br>\n")
-        report.append(summary.replace('\n', '<br>\n'))
+        report.append(markdown.markdown(summary))
         report.append("<hr>\n")
     
     return ''.join(report)
