@@ -2,82 +2,75 @@ import os
 import requests
 import markdown
 import time
-import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # ========== 配置区 ==========
-ARXIV_KEYWORDS = [
-    "geotechnical engineering",
-    "soil mechanics",
-    "slope stability",
-    "tunneling underground",
-    "pile foundation",
-    "ground improvement",
-    "rock mechanics",
-    "consolidation settlement",
-    "retaining wall",
-    "liquefaction"
+# Computers and Geotechnics 的 ISSN，可在此添加更多期刊
+TARGET_JOURNALS = [
+    {"name": "Computers and Geotechnics", "issn": "0266-352X"},
 ]
-MAX_RESULTS = 1  # 每个关键词取1篇，共10篇
+MAX_RESULTS = 10  # 每个期刊取最新10篇
 
 AI_API_URL = "https://apis.iflow.cn/v1/chat/completions"
 AI_MODELS = ["deepseek-v3.2", "qwen3-max", "glm-4.6"]  # 依次尝试，互为备用
 # ============================
 
-ARXIV_API = "http://export.arxiv.org/api/query"
+OPENALEX_API = "https://api.openalex.org/works"
 
 
-def get_latest_papers(keywords=None, max_results=1):
-    """从arXiv按关键词获取最新岩土工程论文"""
-    if keywords is None:
-        keywords = ARXIV_KEYWORDS
+def get_latest_papers(journals=None, max_results=10):
+    """从OpenAlex按期刊ISSN获取最新论文"""
+    if journals is None:
+        journals = TARGET_JOURNALS
 
     papers = []
-    seen_titles = set()
 
-    for kw in keywords:
+    for journal in journals:
         params = {
-            "search_query": f"all:{kw}",
-            "start": 0,
-            "max_results": max_results + 2,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending"
+            "filter": f"primary_location.source.issn:{journal['issn']}",
+            "sort": "publication_date:desc",
+            "per-page": max_results,
+            "select": "title,authorships,publication_date,abstract_inverted_index,primary_location,doi"
         }
         try:
-            response = requests.get(ARXIV_API, params=params, timeout=30)
+            response = requests.get(OPENALEX_API, params=params, timeout=30)
             if response.status_code == 200:
-                root = ET.fromstring(response.content)
-                ns = {'atom': 'http://www.w3.org/2005/Atom'}
-                count = 0
-                for entry in root.findall('atom:entry', ns):
-                    title = entry.find('atom:title', ns).text.strip().replace('\n', ' ')
-                    # 去重
-                    if title in seen_titles:
+                data = response.json()
+                for item in data.get("results", []):
+                    title = item.get("title", "")
+                    if not title:
                         continue
-                    abstract = entry.find('atom:summary', ns).text.strip()
-                    if not abstract:
-                        continue
-                    published = entry.find('atom:published', ns).text[:10]
-                    authors = [a.find('atom:name', ns).text
-                               for a in entry.findall('atom:author', ns)]
-                    link = entry.find('atom:id', ns).text
-                    seen_titles.add(title)
+                    # 还原摘要（OpenAlex用倒排索引存摘要）
+                    inv = item.get("abstract_inverted_index")
+                    if inv:
+                        max_pos = max(pos for positions in inv.values() for pos in positions)
+                        words = [''] * (max_pos + 1)
+                        for word, positions in inv.items():
+                            for pos in positions:
+                                words[pos] = word
+                        abstract = ' '.join(words)
+                    else:
+                        abstract = "无摘要"
+                    authors = [
+                        a["author"]["display_name"]
+                        for a in item.get("authorships", [])
+                        if a.get("author", {}).get("display_name")
+                    ]
+                    published = item.get("publication_date", "")
+                    doi = item.get("doi", "")
                     papers.append({
                         'title': title,
                         'summary': abstract,
                         'authors': authors,
                         'published': published,
-                        'pdf_url': link.replace('abs', 'pdf'),
-                        'journal': kw,
-                        'venue': 'arXiv'
+                        'pdf_url': doi or "",
+                        'journal': journal['name'],
+                        'venue': journal['name']
                     })
-                    count += 1
-                    if count >= max_results:
-                        break
             else:
-                print(f"  arXiv 请求失败: {response.status_code}")
+                print(f"  OpenAlex 请求失败: {response.status_code}")
         except Exception as e:
-            print(f"  获取关键词 '{kw}' 异常: {e}")
+            print(f"  获取期刊 {journal['name']} 异常: {e}")
 
         time.sleep(1)
 
