@@ -2,99 +2,131 @@ import os
 import requests
 import markdown
 import time
-from google import genai
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
-SEARCH_JOURNALS = [
-    "Construction and Building Materials",
-    "Transportation Geotechnics",
-    "Engineering Failure Analysis",
-    "Canadian Geotechnical Journal",
-    "Tunnelling and Underground Space Technology",
-    "Ocean Engineering",
-    "Computers and Geotechnics",
-    "Engineering Applications of Artificial Intelligence",
-    "Computer-Aided Civil and Infrastructure Engineering",
-    "Computers & Industrial Engineering"
+# ========== 配置区 ==========
+ARXIV_KEYWORDS = [
+    "geotechnical engineering",
+    "soil mechanics",
+    "slope stability",
+    "tunneling underground",
+    "pile foundation",
+    "ground improvement",
+    "rock mechanics",
+    "consolidation settlement",
+    "retaining wall",
+    "liquefaction"
 ]
+MAX_RESULTS = 1  # 每个关键词取1篇，共10篇
 
-MAX_RESULTS = 1  # 免费tier每天20次，10个期刊×1篇=10次，安全
+AI_API_URL = "https://apis.iflow.cn/v1/chat/completions"
+AI_MODELS = ["deepseek-v3.2", "qwen3-max", "glm-4.6"]  # 依次尝试，互为备用
+# ============================
 
-SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
-
-SKIP_KEYWORDS = [
-    'Corrigendum', 'Expression of concern', 'Cover Image',
-    'Erratum', 'Retraction', 'Editorial'
-]
+ARXIV_API = "http://export.arxiv.org/api/query"
 
 
-def get_latest_papers(journals=None, max_results=1):
-    """从Semantic Scholar按期刊获取最新论文"""
-    if journals is None:
-        journals = SEARCH_JOURNALS
+def get_latest_papers(keywords=None, max_results=1):
+    """从arXiv按关键词获取最新岩土工程论文"""
+    if keywords is None:
+        keywords = ARXIV_KEYWORDS
 
     papers = []
+    seen_titles = set()
 
-    for journal in journals:
+    for kw in keywords:
         params = {
-            "query": journal,
-            "limit": max_results + 3,  # 多取几篇，过滤后保证有足够数量
-            "fields": "title,authors,year,venue,abstract,url,publicationDate",
+            "search_query": f"all:{kw}",
+            "start": 0,
+            "max_results": max_results + 2,
+            "sortBy": "submittedDate",
+            "sortOrder": "descending"
         }
+        try:
+            response = requests.get(ARXIV_API, params=params, timeout=30)
+            if response.status_code == 200:
+                root = ET.fromstring(response.content)
+                ns = {'atom': 'http://www.w3.org/2005/Atom'}
+                count = 0
+                for entry in root.findall('atom:entry', ns):
+                    title = entry.find('atom:title', ns).text.strip().replace('\n', ' ')
+                    # 去重
+                    if title in seen_titles:
+                        continue
+                    abstract = entry.find('atom:summary', ns).text.strip()
+                    if not abstract:
+                        continue
+                    published = entry.find('atom:published', ns).text[:10]
+                    authors = [a.find('atom:name', ns).text
+                               for a in entry.findall('atom:author', ns)]
+                    link = entry.find('atom:id', ns).text
+                    seen_titles.add(title)
+                    papers.append({
+                        'title': title,
+                        'summary': abstract,
+                        'authors': authors,
+                        'published': published,
+                        'pdf_url': link.replace('abs', 'pdf'),
+                        'journal': kw,
+                        'venue': 'arXiv'
+                    })
+                    count += 1
+                    if count >= max_results:
+                        break
+            else:
+                print(f"  arXiv 请求失败: {response.status_code}")
+        except Exception as e:
+            print(f"  获取关键词 '{kw}' 异常: {e}")
 
-        for retry in range(3):
-            try:
-                response = requests.get(SEMANTIC_SCHOLAR_API, params=params, timeout=30)
-                if response.status_code == 200:
-                    data = response.json()
-                    count = 0
-                    for item in data.get("data", []):
-                        title = item.get('title', '')
-                        # 跳过勘误、声明、封面等无意义条目
-                        if any(kw in title for kw in SKIP_KEYWORDS):
-                            continue
-                        # 跳过没有摘要的
-                        if not item.get('abstract'):
-                            continue
-                        papers.append({
-                            'title': title,
-                            'summary': item.get('abstract', '无摘要'),
-                            'authors': [a.get('name', '') for a in item.get('authors', [])],
-                            'published': item.get('publicationDate') or str(item.get('year', '')),
-                            'pdf_url': item.get('url', ''),
-                            'journal': journal,
-                            'venue': item.get('venue', journal)
-                        })
-                        count += 1
-                        if count >= max_results:
-                            break
-                    break
-                elif response.status_code == 429:
-                    print(f"  速率限制，等待重试 ({retry+1}/3)...")
-                    time.sleep(10)
-                else:
-                    print(f"  获取期刊 {journal} 失败: {response.status_code}")
-                    break
-            except Exception as e:
-                print(f"  获取期刊 {journal} 异常: {e}")
-                break
-
-        time.sleep(2)  # 每个期刊请求间隔2秒
+        time.sleep(1)
 
     papers.sort(key=lambda x: x['published'] or '', reverse=True)
     return papers
 
 
+def call_ai_api(prompt, api_key):
+    """调用AI API，依次尝试三个模型，互为备用"""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    body = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1500,
+        "temperature": 0.7
+    }
+
+    for model in AI_MODELS:
+        try:
+            body["model"] = model
+            response = requests.post(AI_API_URL, headers=headers, json=body, timeout=60)
+            if response.status_code == 200:
+                data = response.json()
+                text = data["choices"][0]["message"]["content"]
+                print(f"    ✅ 使用模型: {model}")
+                return text
+            else:
+                print(f"    ⚠️ {model} 失败 ({response.status_code})，尝试下一个...")
+                time.sleep(2)
+        except Exception as e:
+            print(f"    ⚠️ {model} 异常: {e}，尝试下一个...")
+            time.sleep(2)
+
+    raise Exception("所有模型均调用失败")
+
+
 def generate_summary(paper, api_key=None):
-    """调用Gemini API生成论文摘要"""
-    client = genai.Client(api_key=api_key or os.getenv('GOOGLE_API_KEY'))
+    """生成论文中文解读"""
+    if not api_key:
+        api_key = os.getenv('AI_API_KEY')
 
     prompt = f"""你是一位专业的土木工程/岩土工程论文分析师。请仔细阅读以下论文信息，并提供详细的中文解读：
 
 论文标题：{paper['title']}
 作者：{', '.join(paper['authors'][:5])}{'等' if len(paper['authors']) > 5 else ''}
 发表日期：{paper['published']}
-期刊：{paper['journal']}
+关键词分类：{paper['journal']}
 
 原文摘要：
 {paper['summary']}
@@ -108,20 +140,13 @@ def generate_summary(paper, api_key=None):
 
 请用Markdown格式输出。
 """
-
-    response = client.models.generate_content(
-        model='gemini-2.0-flash',
-        contents=prompt
-    )
-    time.sleep(4)  # 避免超出免费tier速率限制
-    return response.text
+    return call_ai_api(prompt, api_key)
 
 
 def send_wechat_notification(message, token=None):
     """通过PushPlus发送微信通知"""
     if not token:
         token = os.getenv('PUSHPLUS_TOKEN')
-
     if not token:
         print("未配置PushPlus Token，跳过微信推送")
         return
@@ -133,7 +158,6 @@ def send_wechat_notification(message, token=None):
         "content": message,
         "template": "html"
     }
-
     try:
         response = requests.post(url, json=data)
         if response.status_code == 200:
@@ -166,9 +190,7 @@ def send_email_notification(message):
         msg['Subject'] = f'岩土工程论文日报 {datetime.now().strftime("%Y-%m-%d")}'
         msg['From'] = email_from
         msg['To'] = email_to
-
-        html_part = MIMEText(message, 'html', 'utf-8')
-        msg.attach(html_part)
+        msg.attach(MIMEText(message, 'html', 'utf-8'))
 
         with smtplib.SMTP(smtp_server, smtp_port) as server:
             server.ehlo()
@@ -176,7 +198,6 @@ def send_email_notification(message):
             server.ehlo()
             server.login(smtp_user, smtp_password)
             server.send_message(msg)
-
         print("邮箱推送成功")
     except smtplib.SMTPAuthenticationError:
         print("❌ 认证失败：Gmail必须使用App Password，而非账号密码")
@@ -195,13 +216,13 @@ def generate_daily_report(papers, summaries):
 
     for i, (paper, summary) in enumerate(zip(papers, summaries), 1):
         report.append(f"<h2>{i}. {paper['title']}</h2>\n")
-        report.append(f"<p><strong>期刊:</strong> {paper['journal']}</p>\n")
+        report.append(f"<p><strong>关键词:</strong> {paper['journal']}</p>\n")
         authors_str = ', '.join(paper['authors'][:3])
         if len(paper['authors']) > 3:
             authors_str += ' 等'
         report.append(f"<p><strong>作者:</strong> {authors_str}</p>\n")
         report.append(f"<p><strong>发布日期:</strong> {paper['published']}</p>\n")
-        report.append(f"<p><strong>链接:</strong> <a href=\"{paper['pdf_url']}\">点击查看原文</a></p>\n")
+        report.append(f"<p><strong>链接:</strong> <a href=\"{paper['pdf_url']}\">点击查看原文(PDF)</a></p>\n")
         report.append("<br>\n")
         report.append(markdown.markdown(summary))
         report.append("<hr>\n")
@@ -211,13 +232,12 @@ def generate_daily_report(papers, summaries):
 
 def main():
     """主函数"""
-    api_key = os.getenv('GOOGLE_API_KEY')
-
+    api_key = os.getenv('AI_API_KEY')
     if not api_key:
-        print("警告: 未设置GOOGLE_API_KEY环境变量")
-        api_key = input("请输入Gemini API Key: ").strip()
+        print("警告: 未设置AI_API_KEY环境变量")
+        api_key = input("请输入API Key: ").strip()
 
-    print("正在获取各期刊最新论文...")
+    print("正在从arXiv获取最新岩土工程论文...")
     papers = get_latest_papers(max_results=MAX_RESULTS)
     print(f"获取到 {len(papers)} 篇论文\n")
 
@@ -236,6 +256,7 @@ def main():
         except Exception as e:
             print(f"  生成摘要失败: {e}")
             summaries.append("**摘要生成失败**")
+        time.sleep(2)
 
     report = generate_daily_report(papers, summaries)
 
