@@ -1,4 +1,4 @@
-name: Daily ArXiv Paper Bot
+name: Journal Paper Bot
 
 on:
   schedule:
@@ -20,7 +20,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install arxiv google-generativeai requests
+          pip install google-generativeai requests
       
       - name: Run paper bot
         env:
