@@ -81,7 +81,7 @@ def generate_summary(paper, api_key=None):
 请用Markdown格式输出。
 """
     
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     response = model.generate_content(prompt)
     
     return response.text
