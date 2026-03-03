@@ -20,7 +20,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install google-generativeai requests
+          pip install -r requirements.txt
       
       - name: Run paper bot
         env:
