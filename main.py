@@ -128,8 +128,8 @@ def send_email_notification(message):
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     
-    smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
-    smtp_port = int(os.getenv('SMTP_PORT', '587'))
+    smtp_server = os.getenv('SMTP_SERVER') or 'smtp.gmail.com'
+    smtp_port = int(os.getenv('SMTP_PORT') or '587')
     smtp_user = os.getenv('SMTP_USER')
     smtp_password = os.getenv('SMTP_PASSWORD')
     email_from = os.getenv('EMAIL_FROM')
