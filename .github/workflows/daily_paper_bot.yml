@@ -1,5 +1,4 @@
 name: Journal Paper Bot
-
 on:
   schedule:
     - cron: '0 0 * * *'  # 每天UTC 0点运行 (北京时间8点)
@@ -8,24 +7,23 @@ on:
 jobs:
   run-paper-bot:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      
+          python-version: '3.11'
+
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-      
-- name: Run python main.py
-  env:
-    AI_API_KEY: ${{ secrets.AI_API_KEY }}
-    SMTP_USER: ${{ secrets.SMTP_USER }}
-    SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-    EMAIL_TO: ${{ secrets.EMAIL_TO }}
-  run: python main.py
+        run: pip install -r requirements.txt
+
+      - name: Run python main.py
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python main.py
